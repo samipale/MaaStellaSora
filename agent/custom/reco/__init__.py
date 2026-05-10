@@ -1,5 +1,5 @@
-from .climb_tower import ShopRecognition
+from .climb_tower_quiz import *
 
 __all__ = [
-    "ShopRecognition"
+    "QuizRecognition"
 ]
