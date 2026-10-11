@@ -51,12 +51,30 @@ jobs:
             --requirements "$PROJECT_ROOT/agent/requirements.txt" \
             --extra-index-url https://chaquo.com/pypi-13.1/
 
+      - name: Stage Android project resources
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          PI_ROOT="$PROJECT_ROOT/android-build/pi"
+          mkdir -p "$PI_ROOT"
+          cp -a "$PROJECT_ROOT/assets/." "$PI_ROOT/"
+          cp -a "$PROJECT_ROOT/agent" "$PI_ROOT/agent"
+          test -s "$PI_ROOT/interface.json"
+          test -s "$PI_ROOT/agent/main.py"
+
       - name: Generate MaaFwApp profile
         env:
           PROJECT_ROOT: ${{ github.workspace }}
         run: |
           cat > "$PROJECT_ROOT/profile.yaml" <<EOF
-          assets: ${PROJECT_ROOT}
+          assets: ${PROJECT_ROOT}/android-build/pi
+          include:
+            - interface.json
+            - interface/**
+            - resource/**
+            - agent/**
+            - CONTACT
+            - LICENSE
           app:
             id: maastellasora
             label: MaaStellaSora
