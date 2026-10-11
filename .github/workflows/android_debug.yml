@@ -1,0 +1,132 @@
+name: Android Debug Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/android_debug.yml"
+      - "assets/**"
+      - "agent/**"
+      - "README.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout MaaFwApp
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Aliothmoon/MaaFwApp
+          path: Android/MaaFwApp
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build Python agent bundle
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 "$PROJECT_ROOT/Android/MaaFwApp/scripts/build_agent_bundle.py" \
+            --out "$PROJECT_ROOT/agent-dist" \
+            --abi arm64-v8a \
+            --requirements "$PROJECT_ROOT/agent/requirements.txt" \
+            --extra-index-url https://chaquo.com/pypi-13.1/
+
+      - name: Generate MaaFwApp profile
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          cat > "$PROJECT_ROOT/profile.yaml" <<EOF
+          assets: ${PROJECT_ROOT}
+          app:
+            id: maastellasora
+            label: MaaStellaSora
+          agent:
+            sourceDir: ${PROJECT_ROOT}/agent-dist
+            abi: [arm64-v8a]
+            runtimes:
+              - location: bundle
+                executable: bin/python3
+                name: py-agent
+                args: [-u, agent/main.py]
+                env:
+                  PYTHONHOME: "{bundle}/prefix"
+                  PYTHONPATH: "{bundle}/site-packages/pure.zip:{bundle}/site-packages"
+                  LD_LIBRARY_PATH: "{bundle}/prefix/lib:{nativeLibs}"
+                  MAAFW_BINARY_PATH: "{nativeLibs}"
+          EOF
+
+          echo "Generated profile:" 
+          cat "$PROJECT_ROOT/profile.yaml"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Deploy MaaFramework runtime
+        working-directory: Android/MaaFwApp
+        run: |
+          python3 scripts/setup_maa_framework.py --abi arm64-v8a
+
+      - name: Write local.properties
+        working-directory: Android/MaaFwApp
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          {
+            echo "sdk.dir=${ANDROID_HOME}"
+            echo "pi.profile=${PROJECT_ROOT}/profile.yaml"
+            echo "build.debugAbi=arm64-v8a"
+            echo "build.releaseAbi=arm64-v8a"
+          } > local.properties
+          cat local.properties
+
+      - name: Build debug APK
+        working-directory: Android/MaaFwApp
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Rename APK
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          DIR="$PROJECT_ROOT/Android/MaaFwApp/app/build/outputs/apk/debug"
+          APK_PATH=$(find "$DIR" -maxdepth 1 -name "*.apk" | head -n 1)
+          if [[ -z "$APK_PATH" ]]; then
+            echo "No APK generated in $DIR"
+            exit 1
+          fi
+          cp "$APK_PATH" "$DIR/MaaStellaSora-android-debug.apk"
+          echo "APK_PATH=$DIR/MaaStellaSora-android-debug.apk" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maastellasora-android-debug
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
