@@ -51,16 +51,73 @@ jobs:
             --requirements "$PROJECT_ROOT/agent/requirements.txt" \
             --extra-index-url https://chaquo.com/pypi-13.1/
 
+      - name: Resolve Android project version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+            if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*)?$ ]]; then
+              echo "Unsupported release tag: $version"
+              exit 1
+            fi
+          else
+            release_tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+            build_tag="${release_tag}-$(date -u +%y%m%d)-$(git rev-parse --short HEAD)"
+            prefix="${build_tag%-*-*}"
+            suffix="${build_tag#"$prefix"-}"
+            version="${prefix}-ci.${suffix}"
+          fi
+
+          echo "Android project version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Stage Android project resources
         env:
           PROJECT_ROOT: ${{ github.workspace }}
+          ANDROID_PI_VERSION: ${{ steps.version.outputs.version }}
         run: |
           PI_ROOT="$PROJECT_ROOT/android-build/pi"
           mkdir -p "$PI_ROOT"
           cp -a "$PROJECT_ROOT/assets/." "$PI_ROOT/"
           cp -a "$PROJECT_ROOT/agent" "$PI_ROOT/agent"
-          test -s "$PI_ROOT/interface.json"
           test -s "$PI_ROOT/agent/main.py"
+          python3 - "$PI_ROOT" "$ANDROID_PI_VERSION" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          pi_root = Path(sys.argv[1])
+          interface_path = pi_root / "interface.json"
+          interface = json.loads(interface_path.read_text(encoding="utf-8"))
+          version = sys.argv[2]
+
+          interface["version"] = version
+          interface["custom_title"] = f"星塔助手{version}"
+
+          for imported in interface.get("import", []):
+              if not (pi_root / imported).is_file():
+                  raise FileNotFoundError(f"interface import does not exist: {imported}")
+          for resource in interface.get("resource", []):
+              for relative_path in resource.get("path", []):
+                  if not (pi_root / relative_path).is_dir():
+                      raise FileNotFoundError(
+                          f"resource path does not exist: {relative_path}"
+                      )
+          for controller in interface.get("controller", []):
+              for relative_path in controller.get("attach_resource_path", []):
+                  if not (pi_root / relative_path).is_dir():
+                      raise FileNotFoundError(
+                          f"controller resource path does not exist: {relative_path}"
+                      )
+
+          interface_path.write_text(
+              json.dumps(interface, ensure_ascii=False, indent=4) + "\n",
+              encoding="utf-8",
+          )
+          print(f"Prepared Android PI version {version}")
+          PY
 
       - name: Generate MaaFwApp profile
         env:
